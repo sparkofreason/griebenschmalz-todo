@@ -1,10 +1,10 @@
-(defproject datascript-todo "0.1.0"
+(defproject griebenschmalz-todo "0.1.0"
   :dependencies [[org.clojure/clojure "1.7.0"]
                  [org.clojure/clojurescript "1.7.189"]
                  [datascript "0.13.3"]
                  [datascript-transit "0.2.0"]
                  [rum "0.6.0"]
-                 [griebenschmalz "0.1.0"]]
+                 [griebenschmalz "0.1.1"]]
 
   :plugins [[lein-cljsbuild "1.1.0"]]
 

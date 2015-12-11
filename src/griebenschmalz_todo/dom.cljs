@@ -1,4 +1,4 @@
-(ns datascript-todo.dom
+(ns griebenschmalz-todo.dom
   (:require
     [clojure.string :as str]))
 

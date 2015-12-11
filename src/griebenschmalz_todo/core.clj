@@ -1,4 +1,4 @@
-(ns datascript-todo.core)
+(ns griebenschmalz-todo.core)
 
 (defmacro profile [k & body]
   `(let [k# ~k]

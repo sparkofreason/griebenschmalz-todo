@@ -1,4 +1,4 @@
-(ns datascript-todo.util
+(ns griebenschmalz-todo.util
   (:require
     [datascript.core :as d]))
 
