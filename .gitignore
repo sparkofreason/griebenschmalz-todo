@@ -11,3 +11,5 @@ pom.xml.asc
 /dev/out/*
 /dev/*.js
 .DS_Store
+/.idea
+*.iml
