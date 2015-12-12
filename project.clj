@@ -4,7 +4,8 @@
                  [datascript "0.13.3"]
                  [datascript-transit "0.2.0"]
                  [rum "0.6.0"]
-                 [griebenschmalz "0.1.1"]]
+                 [griebenschmalz "0.2.0"]
+                 [funcool/beicon "0.3.0"]]
 
   :plugins [[lein-cljsbuild "1.1.0"]]
 

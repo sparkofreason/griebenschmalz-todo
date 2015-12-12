@@ -5,9 +5,10 @@
     [datascript.core :as d]
     [rum.core :as rum]
     [datascript.transit :as dt]
+    [beicon.core :as s]
     [griebenschmalz-todo.dom :as dom]
     [griebenschmalz-todo.util :as u]
-    [griebenschmalz.core :refer [start exec!] :as g])
+    [griebenschmalz.core :refer [start do!] :as g])
   (:require-macros
     [griebenschmalz-todo.core :refer [profile]]))
 
@@ -17,17 +18,11 @@
              :todo/project {:db/valueType :db.type/ref}
              :todo/done    {:db/index true}
              :todo/due     {:db/index true}})
-#_(defonce conn (d/create-conn schema))
 
 (declare render persist)
 
-#_(defn reset-conn! [db]
-    (reset! conn db)
-    (render db)
-    (persist db))
 ;; History
 
-(defonce history (atom []))
 (def ^:const history-limit 10)
 
 ;;; ACTIONS
@@ -35,14 +30,24 @@
 ;; Entity with id=0 is used for storing auxilary view information
 ;; like filter value and selected group
 
-(defmethod g/exec ::set-system-attrs
+(defn update-db-history
+  [state {:keys [db-before db-after] :as tx-report}]
+  (-> state
+      (update
+        :history (fn [h]
+                   (-> h
+                       (u/drop-tail #(identical? % db-before))
+                       (conj db-after)
+                       (u/trim-head history-limit))))
+      (assoc :db db-after)))
+
+(defmethod g/next-state ::set-system-attrs
   [{:keys [attrs] :as action} {:keys [db] :as state}]
-  (println attrs)
-  (assoc state :db (d/db-with db
-                              (for [[attr value] attrs]
-                                (if value
-                                  [:db/add 0 attr value]
-                                  [:db.fn/retractAttribute 0 attr])))))
+  (update-db-history state (d/with db
+                                   (for [[attr value] attrs]
+                                     (if value
+                                       [:db/add 0 attr value]
+                                       [:db.fn/retractAttribute 0 attr])))))
 
 ;; This transaction function swaps the value of :todo/done attribute.
 ;; Transaction funs are handy in situations when to decide what to do
@@ -52,15 +57,15 @@
   (let [done? (:todo/done (d/entity db eid))]
     [[:db/add eid :todo/done (not done?)]]))
 
-(defmethod g/exec ::toggle-todo
+(defmethod g/next-state ::toggle-todo
   [{:keys [eid] :as action} {:keys [db] :as state}]
-  (assoc state :db (d/db-with db [[:db.fn/call toggle-todo-tx eid]])))
+  (update-db-history state (d/with db [[:db.fn/call toggle-todo-tx eid]])))
 
-(defmethod g/exec ::change-task-field
+(defmethod g/next-state ::change-task-field
   [{:keys [field value] :as action} {:keys [db] :as state}]
   (assoc-in state [:todo field] value))
 
-(defmethod g/exec ::add-todo
+(defmethod g/next-state ::add-todo
   [action {:keys [db todo] :as state}]
   (let [project (:project todo)
         project-id (when project (u/e-by-av db :project/name project))
@@ -74,12 +79,16 @@
                                        (js/Date. val)))
                      :todo/tags    (:tags todo)}
                     (u/remove-vals nil?))
-        db (d/db-with db (concat project-tx [entity]))]
-    {:db   db
-     :todo {:text    nil
-            :project nil
-            :due     nil
-            :tags    nil}}))
+        tx-report (d/with db (concat project-tx [entity]))]
+    (assoc (update-db-history state tx-report)
+      :todo {:text    nil
+             :project nil
+             :due     nil
+             :tags    nil})))
+
+(defmethod g/next-state ::reset-db
+  [action state]
+  (assoc state :db (:db action)))
 
 ;;; VIEWS
 ;; Keyword filter
@@ -95,7 +104,7 @@
            [:input.filter {:type        "text"
                            :value       (or (system-attr db :system/filter) "")
                            :on-change   (fn [_]
-                                          (exec! message-bus {:type ::set-system-attrs :attrs {:system/filter (dom/value (dom/q ".filter"))}}))
+                                          (do! message-bus {:type ::set-system-attrs :attrs {:system/filter (dom/value (dom/q ".filter"))}}))
                            :placeholder "Filter"}]])
 
 ;; Rules are used to implement OR semantic of a filter
@@ -182,9 +191,9 @@
                                            (system-attr db :system/group :system/group-item))
                                     "group-item_selected")}
              [:span {:on-click (fn [_]
-                                 (exec! message-bus {:type  ::set-system-attrs
-                                                     :attrs {:system/group      group
-                                                             :system/group-item item}}))}
+                                 (do! message-bus {:type  ::set-system-attrs
+                                                   :attrs {:system/group      group
+                                                           :system/group-item item}}))}
               title]
              (when count
                [:span.group-item-count count])]))
@@ -228,7 +237,7 @@
                    :let [td (d/entity db eid)]]
                ^{:key (str eid)}
                [:.todo {:class (if (:todo/done td) "todo_done" "")}
-                [:.todo-checkbox {:on-click #(exec! message-bus {:type ::toggle-todo :eid eid})} "✔︎"]
+                [:.todo-checkbox {:on-click #(do! message-bus {:type ::toggle-todo :eid eid})} "✔︎"]
                 [:.todo-text (:todo/text td)]
                 [:.todo-subtext
                  (when-let [due (:todo/due td)]
@@ -241,28 +250,28 @@
                    ^{:key tag} [:span tag])]]))])
 
 (rum/defc add-view [message-bus {:keys [text project due tags] :as todo}]
-          [:div.add-view #_{:on-submit (fn [_] (exec! message-bus {:type ::add-todo}) false)}
+          [:div.add-view #_{:on-submit (fn [_] (do! message-bus {:type ::add-todo}) false)}
            [:input.add-text {:type      "text" :placeholder "New task" :value text
-                             :on-change #(exec! message-bus {:type ::change-task-field :field :text :value (dom/value (dom/q ".add-text"))})}]
+                             :on-change #(do! message-bus {:type ::change-task-field :field :text :value (dom/value (dom/q ".add-text"))})}]
            [:input.add-project {:type      "text" :placeholder "Project" :value project
-                                :on-change #(exec! message-bus {:type ::change-task-field :field :project :value (dom/value (dom/q ".add-project"))})}]
+                                :on-change #(do! message-bus {:type ::change-task-field :field :project :value (dom/value (dom/q ".add-project"))})}]
            [:input.add-tags {:type      "text" :placeholder "Tags" :value tags
-                             :on-change #(exec! message-bus {:type ::change-task-field :field :tags :value (dom/value (dom/q ".add-tags"))})}]
+                             :on-change #(do! message-bus {:type ::change-task-field :field :tags :value (dom/value (dom/q ".add-tags"))})}]
            [:input.add-due {:type      "text" :placeholder "Due date" :value due
-                            :on-change #(exec! message-bus {:type ::change-task-field :field :due :value (dom/value (dom/q ".add-due"))})}]
-           [:button.add-submit {:on-click (fn [_] (exec! message-bus {:type ::add-todo}) false)} "Add Task"]])
+                            :on-change #(do! message-bus {:type ::change-task-field :field :due :value (dom/value (dom/q ".add-due"))})}]
+           [:button.add-submit {:on-click (fn [_] (do! message-bus {:type ::add-todo}) false)} "Add Task"]])
 
-(rum/defc history-view [message-bus db]
+(rum/defc history-view [message-bus {:keys [db todo history] :as state}]
           [:.history-view
-           (for [state @history]
+           (for [state history]
              [:.history-state
               {:class    (when (identical? state db) "history-selected")
-               :on-click (fn [_] (reset-conn! state))}])
-           (if-let [prev (u/find-prev @history #(identical? db %))]
-             [:button.history-btn {:on-click (fn [_] (reset-conn! prev))} "‹ undo"]
+               :on-click (fn [_] (do! message-bus {:type ::reset-db :db state}))}])
+           (if-let [prev (u/find-prev history #(identical? db %))]
+             [:button.history-btn {:on-click (fn [_] (do! message-bus {:type ::reset-db :db prev}))} "‹ undo"]
              [:button.history-btn {:disabled true} "‹ undo"])
-           (if-let [next (u/find-next @history #(identical? db %))]
-             [:button.history-btn {:on-click (fn [_] (reset-conn! next))} "redo ›"]
+           (if-let [next (u/find-next history #(identical? db %))]
+             [:button.history-btn {:on-click (fn [_] (do! message-bus {:type ::reset-db :db next}))} "redo ›"]
              [:button.history-btn {:disabled true} "redo ›"])])
 
 (rum/defc canvas [message-bus {:keys [db todo] :as state}]
@@ -274,7 +283,7 @@
                 ^{:key "1"} (overview-pane message-bus db)
                 ^{:key "2"} (todo-pane message-bus db)))]
            (add-view message-bus todo)
-           #_(history-view message-bus db)])
+           (history-view message-bus state)])
 
 (defn render
   ([message-bus state]
@@ -283,25 +292,13 @@
 
 ;; logging of all transactions (prettified)
 #_(d/listen! conn :log
-           (fn [tx-report]
-             (let [tx-id (get-in tx-report [:tempids :db/current-tx])
-                   datoms (:tx-data tx-report)
-                   datom->str (fn [d] (str (if (:added d) "+" "−")
-                                           "[" (:e d) " " (:a d) " " (pr-str (:v d)) "]"))]
-               (println
-                 (str/join "\n" (concat [(str "tx " tx-id ":")] (map datom->str datoms)))))))
-
-;; history
-
-#_(d/listen! conn :history
-           (fn [tx-report]
-             (let [{:keys [db-before db-after]} tx-report]
-               (when (and db-before db-after)
-                 (swap! history (fn [h]
-                                  (-> h
-                                      (u/drop-tail #(identical? % db-before))
-                                      (conj db-after)
-                                      (u/trim-head history-limit))))))))
+             (fn [tx-report]
+               (let [tx-id (get-in tx-report [:tempids :db/current-tx])
+                     datoms (:tx-data tx-report)
+                     datom->str (fn [d] (str (if (:added d) "+" "−")
+                                             "[" (:e d) " " (:a d) " " (pr-str (:v d)) "]"))]
+                 (println
+                   (str/join "\n" (concat [(str "tx " tx-id ":")] (map datom->str datoms)))))))
 
 ;; transit serialization
 
@@ -318,10 +315,10 @@
   (js/localStorage.setItem "datascript-todo/DB" (db->string db)))
 
 #_(d/listen! conn :persistence
-           (fn [tx-report]                                  ;; FIXME do not notify with nil as db-report
-             ;; FIXME do not notify if tx-data is empty
-             (when-let [db (:db-after tx-report)]
-               (js/setTimeout #(persist db) 0))))
+             (fn [tx-report]                                ;; FIXME do not notify with nil as db-report
+               ;; FIXME do not notify if tx-data is empty
+               (when-let [db (:db-after tx-report)]
+                 (js/setTimeout #(persist db) 0))))
 
 ;; restoring once persisted DB on page load
 (def initial-state
@@ -329,18 +326,19 @@
              (when-let [stored (js/localStorage.getItem "datascript-todo/DB")]
                (let [stored-db (string->db stored)]
                  (when (= (:schema stored-db) schema)       ;; check for code update
-                   (swap! history conj stored-db)
                    stored-db)))
              (d/db-with (d/empty-db schema) u/fixtures))]
-    {:db   db
-     :todo {:text    nil
-            :project nil
-            :due     nil
-            :tags    nil}}))
+    {:db      db
+     :todo    {:text    nil
+               :project nil
+               :due     nil
+               :tags    nil}
+     :history [db]}))
 
 #_(js/localStorage.clear)
 
 ;; for interactive re-evaluation
 (start initial-state render)
+
 
 
