@@ -41,8 +41,8 @@
                        (u/trim-head history-limit))))
       (assoc :db db-after)))
 
-(defmethod g/next-state ::set-system-attrs
-  [{:keys [attrs] :as action} {:keys [db] :as state}]
+(defn set-system-attrs
+  [attrs {:keys [db] :as state}]
   (update-db-history state (d/with db
                                    (for [[attr value] attrs]
                                      (if value
@@ -57,16 +57,16 @@
   (let [done? (:todo/done (d/entity db eid))]
     [[:db/add eid :todo/done (not done?)]]))
 
-(defmethod g/next-state ::toggle-todo
-  [{:keys [eid] :as action} {:keys [db] :as state}]
+(defn toggle-todo
+  [eid {:keys [db] :as state}]
   (update-db-history state (d/with db [[:db.fn/call toggle-todo-tx eid]])))
 
-(defmethod g/next-state ::change-task-field
-  [{:keys [field value] :as action} {:keys [db] :as state}]
+(defn change-task-field
+  [field value {:keys [db] :as state}]
   (assoc-in state [:todo field] value))
 
-(defmethod g/next-state ::add-todo
-  [action {:keys [db todo] :as state}]
+(defn add-todo
+  [{:keys [db todo] :as state}]
   (let [project (:project todo)
         project-id (when project (u/e-by-av db :project/name project))
         project-tx (when (and project (nil? project-id))
@@ -86,9 +86,9 @@
              :due     nil
              :tags    nil})))
 
-(defmethod g/next-state ::reset-db
-  [action state]
-  (assoc state :db (:db action)))
+(defn reset-db
+  [db state]
+  (assoc state :db db))
 
 ;;; VIEWS
 ;; Keyword filter
@@ -104,7 +104,7 @@
            [:input.filter {:type        "text"
                            :value       (or (system-attr db :system/filter) "")
                            :on-change   (fn [_]
-                                          (do! message-bus {:type ::set-system-attrs :attrs {:system/filter (dom/value (dom/q ".filter"))}}))
+                                          (do! message-bus (partial set-system-attrs {:system/filter (dom/value (dom/q ".filter"))})))
                            :placeholder "Filter"}]])
 
 ;; Rules are used to implement OR semantic of a filter
@@ -191,9 +191,8 @@
                                            (system-attr db :system/group :system/group-item))
                                     "group-item_selected")}
              [:span {:on-click (fn [_]
-                                 (do! message-bus {:type  ::set-system-attrs
-                                                   :attrs {:system/group      group
-                                                           :system/group-item item}}))}
+                                 (do! message-bus (partial set-system-attrs {:system/group      group
+                                                                             :system/group-item item})))}
               title]
              (when count
                [:span.group-item-count count])]))
@@ -237,7 +236,7 @@
                    :let [td (d/entity db eid)]]
                ^{:key (str eid)}
                [:.todo {:class (if (:todo/done td) "todo_done" "")}
-                [:.todo-checkbox {:on-click #(do! message-bus {:type ::toggle-todo :eid eid})} "✔︎"]
+                [:.todo-checkbox {:on-click #(do! message-bus (partial toggle-todo eid))} "✔︎"]
                 [:.todo-text (:todo/text td)]
                 [:.todo-subtext
                  (when-let [due (:todo/due td)]
@@ -252,26 +251,26 @@
 (rum/defc add-view [message-bus {:keys [text project due tags] :as todo}]
           [:div.add-view #_{:on-submit (fn [_] (do! message-bus {:type ::add-todo}) false)}
            [:input.add-text {:type      "text" :placeholder "New task" :value text
-                             :on-change #(do! message-bus {:type ::change-task-field :field :text :value (dom/value (dom/q ".add-text"))})}]
+                             :on-change #(do! message-bus (partial change-task-field :text (dom/value (dom/q ".add-text"))))}]
            [:input.add-project {:type      "text" :placeholder "Project" :value project
-                                :on-change #(do! message-bus {:type ::change-task-field :field :project :value (dom/value (dom/q ".add-project"))})}]
+                                :on-change #(do! message-bus (partial change-task-field :project (dom/value (dom/q ".add-project"))))}]
            [:input.add-tags {:type      "text" :placeholder "Tags" :value tags
-                             :on-change #(do! message-bus {:type ::change-task-field :field :tags :value (dom/value (dom/q ".add-tags"))})}]
+                             :on-change #(do! message-bus (partial change-task-field :tags (dom/value (dom/q ".add-tags"))))}]
            [:input.add-due {:type      "text" :placeholder "Due date" :value due
-                            :on-change #(do! message-bus {:type ::change-task-field :field :due :value (dom/value (dom/q ".add-due"))})}]
-           [:button.add-submit {:on-click (fn [_] (do! message-bus {:type ::add-todo}) false)} "Add Task"]])
+                            :on-change #(do! message-bus (partial change-task-field :due (dom/value (dom/q ".add-due"))))}]
+           [:button.add-submit {:on-click (fn [_] (do! message-bus add-todo) false)} "Add Task"]])
 
 (rum/defc history-view [message-bus {:keys [db todo history] :as state}]
           [:.history-view
            (for [state history]
              [:.history-state
               {:class    (when (identical? state db) "history-selected")
-               :on-click (fn [_] (do! message-bus {:type ::reset-db :db state}))}])
+               :on-click (fn [_] (do! message-bus (partial reset-db state)))}])
            (if-let [prev (u/find-prev history #(identical? db %))]
-             [:button.history-btn {:on-click (fn [_] (do! message-bus {:type ::reset-db :db prev}))} "‹ undo"]
+             [:button.history-btn {:on-click (fn [_] (do! message-bus (partial reset-db prev)))} "‹ undo"]
              [:button.history-btn {:disabled true} "‹ undo"])
            (if-let [next (u/find-next history #(identical? db %))]
-             [:button.history-btn {:on-click (fn [_] (do! message-bus {:type ::reset-db :db next}))} "redo ›"]
+             [:button.history-btn {:on-click (fn [_] (do! message-bus (partial reset-db next)))} "redo ›"]
              [:button.history-btn {:disabled true} "redo ›"])])
 
 (rum/defc canvas [message-bus {:keys [db todo] :as state}]
